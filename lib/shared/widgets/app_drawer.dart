@@ -241,17 +241,13 @@ class AppDrawer extends StatelessWidget {
   Future<void> _unsubscribe(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     final auth = context.read<AuthProvider>();
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
     final prefs = await SharedPreferences.getInstance();
-    final phone = prefs.getString(AuthService.phoneKey) ?? '';
+    final phone =
+        auth.phoneNumber ?? prefs.getString(AuthService.phoneKey) ?? '';
 
     if (phone.isEmpty) {
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Phone not found!'),
-          backgroundColor: AppColors.error,
-        ),
-      );
+      await auth.signOut();
       return;
     }
 
@@ -279,12 +275,13 @@ class AppDrawer extends StatelessWidget {
     );
 
     if (confirmed != true || !context.mounted) return;
+    // Close the drawer first. Note: after this pop, `context` (AppDrawer)
+    // gets unmounted, so we must use `rootNavigator` from here on.
     Navigator.of(context).pop();
-    final navigator = Navigator.of(context);
 
     var loaderOpen = true;
     showDialog<void>(
-      context: context,
+      context: rootNavigator.context,
       barrierDismissible: false,
       builder: (_) => const PopScope(
         canPop: false,
@@ -292,11 +289,11 @@ class AppDrawer extends StatelessWidget {
       ),
     );
 
-    Future<void> closeLoader() async {
+    void closeLoader() {
       if (!loaderOpen) return;
       loaderOpen = false;
-      if (navigator.canPop()) {
-        navigator.pop();
+      if (rootNavigator.canPop()) {
+        rootNavigator.pop();
       }
     }
 
@@ -308,8 +305,7 @@ class AppDrawer extends StatelessWidget {
           )
           .timeout(const Duration(seconds: 15));
 
-      if (!context.mounted) return;
-      await closeLoader();
+      closeLoader();
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}');
       }
@@ -319,13 +315,33 @@ class AppDrawer extends StatelessWidget {
         throw Exception('Unexpected response shape');
       }
 
-      final statusCode = decoded['statusCode']?.toString() ?? '';
-      final statusDetail = decoded['statusDetail']?.toString() ?? '';
-      final subscriptionStatus =
-          decoded['subscriptionStatus']?.toString().toUpperCase() ?? '';
+      final statusCode = (decoded['statusCode'] ??
+              decoded['StatusCode'] ??
+              decoded['status_code'] ??
+              '')
+          .toString()
+          .trim()
+          .toUpperCase();
+      final statusDetail =
+          (decoded['statusDetail'] ?? decoded['message'] ?? '')
+              .toString()
+              .trim();
+      final subscriptionStatus = (decoded['subscriptionStatus'] ??
+              decoded['SubscriptionStatus'] ??
+              '')
+          .toString()
+          .trim()
+          .toUpperCase();
+      final status = (decoded['status'] ?? decoded['result'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
       final success = decoded['success'] == true ||
+          status == 'success' ||
           statusCode == 'S1000' ||
-          subscriptionStatus == 'UNREGISTERED';
+          subscriptionStatus == 'UNREGISTERED' ||
+          statusDetail.toLowerCase().contains('unregistered') ||
+          statusDetail.toLowerCase().contains('success');
 
       if (!success) {
         messenger.showSnackBar(
@@ -342,16 +358,14 @@ class AppDrawer extends StatelessWidget {
       }
 
       await auth.signOut();
-      if (!context.mounted) return;
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('Unsubscribing success!'),
+          content: Text('Unsubscribed successfully!'),
           backgroundColor: Colors.green,
         ),
       );
     } on TimeoutException {
-      if (!context.mounted) return;
-      await closeLoader();
+      closeLoader();
       messenger.showSnackBar(
         const SnackBar(
           content: Text('Timeout error!'),
@@ -359,8 +373,7 @@ class AppDrawer extends StatelessWidget {
         ),
       );
     } catch (error) {
-      if (!context.mounted) return;
-      await closeLoader();
+      closeLoader();
       messenger.showSnackBar(
         SnackBar(
           content: Text('Network error: $error'),
